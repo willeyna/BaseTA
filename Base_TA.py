@@ -247,6 +247,7 @@ class tester():
         casc_energy = psp.SplineTable('./splines/cascade_E_dec_photospline_v000_3D.fits')
         casc_bkg = psp.SplineTable('./splines/cascade_bg_2d_photospline.fits')
 
+        #temporary northern sky only ptau made with Northern Tracks and DNN Cascades
         topology = psp.SplineTable('./splines/tau_photospline_v000_2D.fits')
 
         #fills in tester with splines for energy, background spatial term, and topology for both split topology and non split topology searches
