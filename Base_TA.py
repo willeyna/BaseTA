@@ -262,8 +262,10 @@ class tester():
         self.args['Tau'] = topology
 
     #wrapper function for creating a number of events and calculating TS
-    def test_methods(self, ra, dec, ninj_t = 0, ninj_c = 0, gamma = 2):
+    def test_methods(self, ra, dec, ninj_t = 0, ninj_c = 0, gamma = 2, return_fit = False):
         tracks = np.concatenate([self.gen(ninj_t, gamma, 0, inra = ra, indec = dec),self.gen(self.track_count, 3.7, 0)])
         cascades = np.concatenate([self.gen(ninj_c, gamma, 1, inra = ra, indec = dec),self.gen(self.cascade_count, 3.7, 1)])
 
+        if return_fit:
+            return self.analyze(tracks, cascades, ra, dec)[0], self.analyze(tracks, cascades, ra, dec)[1]
         return self.analyze(tracks, cascades, ra, dec)[0]
