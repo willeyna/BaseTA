@@ -116,9 +116,17 @@ class tester():
         # cuts for tracks within delta_ang of the source
         # does NOT cut on cascade events
         source_tracks = tracks[GreatCircleDistance(tracks['ra'], tracks['dec'], src_ra, src_dec) < self['delta_ang']]
+        
+        #PATH IF CASCADES MISSING (1 sample)
+        if cascades is None: 
+            B = self.fB(source_tracks)
+            N = tracks.shape[0]
+            x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2.5), bounds = ((0,1000),(1,4)), fprime = None, approx_grad = False, args = (source_tracks, cascades, src_ra, src_dec, B, N))
+            TS = -2*llh
+            return TS, x, warn
+            
         evs = np.concatenate([source_tracks, cascades])
         #number of events considered in the signal part of llh
-        nev = evs.shape[0]
 
         #total event count
         N = tracks.shape[0] + cascades.shape[0]
@@ -127,7 +135,7 @@ class tester():
         casc_B  = self.fB(cascades)
         B = np.concatenate([track_B, casc_B])
 
-        x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2.5), bounds = ((0,nev),(1,4)), fprime = None, approx_grad = False, args = (source_tracks, cascades, src_ra, src_dec, B, N))
+        x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2.5), bounds = ((0,1000),(1,4)), fprime = None, approx_grad = False, args = (source_tracks, cascades, src_ra, src_dec, B, N))
 
         #negative max llh
         maxllh = -llh
@@ -137,33 +145,48 @@ class tester():
 
     #not built to be called on its own-- rather through analyze which passes in the right args
     def llh(self, x, tracks, cascades, src_ra, src_dec, B, N):
-        deltaN = N - (tracks.shape[0] - cascades.shape[0])
         # x = (n, gamma)
         ns = x[0]
         gamma = x[1]
+        
+        #PATH IF CASCADES MISSING (1 sample)
+        if cascades is None: 
+            deltaN = N - (tracks.shape[0])
+            S = self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma)
+            llh_vals = (ns/N)*(S/B - 1) + 1
+            logllh = np.sum(np.log(llh_vals)) + deltaN*np.log(1-(ns/N))
+            #gradient calculation
+            dl_dns = (np.sum((S/B - 1.)/llh_vals) - (deltaN)/(1.-(ns/N)))/N
+            product_rule = (self.f_psi(tracks, src_ra, src_dec, gamma, dgamma = True)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma) + 
+                              self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma, dgamma = True)* self.f_tau(tracks, src_ra, src_dec, gamma) + 
+                              self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma, dgamma = True))
+            dl_dgamma = np.sum((ns/N)/(llh_vals * B) * product_rule)
+            return (-logllh, (-dl_dns, -dl_dgamma))
+        
+        deltaN = N - (tracks.shape[0] + cascades.shape[0])
 
         track_S = self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma)
         casc_S = self.f_psi(cascades, src_ra, src_dec, gamma)*self.f_energy(cascades, src_ra, src_dec, gamma)* self.f_tau(cascades, src_ra, src_dec, gamma)
         S = np.concatenate([track_S, casc_S])
-
+        
         llh_vals = (ns/N)*(S/B - 1) + 1
 
         logllh = np.sum(np.log(llh_vals)) + deltaN*np.log(1-(ns/N))
-
+        
         #gradient calculation
         dl_dns = (np.sum((S/B - 1.)/llh_vals) - (deltaN)/(1.-(ns/N)))/N
-
-        product_rule_tracks = (self.f_psi(tracks, src_ra, src_dec, gamma, dgamma = True)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma) +
-                              self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma, dgamma = True)* self.f_tau(tracks, src_ra, src_dec, gamma) +
+        
+        product_rule_tracks = (self.f_psi(tracks, src_ra, src_dec, gamma, dgamma = True)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma) + 
+                              self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma, dgamma = True)* self.f_tau(tracks, src_ra, src_dec, gamma) + 
                               self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma, dgamma = True))
-
-        product_rule_cascades = (self.f_psi(cascades, src_ra, src_dec, gamma, dgamma = True)*self.f_energy(cascades, src_ra, src_dec, gamma)* self.f_tau(cascades, src_ra, src_dec, gamma) +
-                              self.f_psi(cascades, src_ra, src_dec, gamma)*self.f_energy(cascades, src_ra, src_dec, gamma, dgamma = True)* self.f_tau(cascades, src_ra, src_dec, gamma) +
+        
+        product_rule_cascades = (self.f_psi(cascades, src_ra, src_dec, gamma, dgamma = True)*self.f_energy(cascades, src_ra, src_dec, gamma)* self.f_tau(cascades, src_ra, src_dec, gamma) + 
+                              self.f_psi(cascades, src_ra, src_dec, gamma)*self.f_energy(cascades, src_ra, src_dec, gamma, dgamma = True)* self.f_tau(cascades, src_ra, src_dec, gamma) + 
                               self.f_psi(cascades, src_ra, src_dec, gamma)*self.f_energy(cascades, src_ra, src_dec, gamma)* self.f_tau(cascades, src_ra, src_dec, gamma, dgamma = True))
         product_rule = np.concatenate([product_rule_tracks, product_rule_cascades])
-
+        
         dl_dgamma = np.sum((ns/N)/(llh_vals * B) * product_rule)
-
+ 
         return (-logllh, (-dl_dns, -dl_dgamma))
 
     def fB(self, events):
@@ -181,9 +204,9 @@ class tester():
         psi = GreatCircleDistance(events['ra'], events['dec'], src_ra, src_dec)
         if not topo:
             if not dgamma:
-                return self['ST'].evaluate_simple([np.log10(events['angErr']), events['logE'], np.log10(psi), np.full(events.shape[0], gamma)])/(psi *np.log(10) * np.sin(psi)) * np.pi/180
+                return self['ST'].evaluate_simple([np.log10(events['angErr']), events['logE'], np.log10(psi), np.full(events.shape[0], gamma)])/(psi *np.log(10) * np.sin(psi)) 
             else:
-                return self['ST'].evaluate_simple([np.log10(events['angErr']), events['logE'], np.log10(psi), np.full(events.shape[0], gamma)], 8)/(psi *np.log(10) * np.sin(psi)) * np.pi/180
+                return self['ST'].evaluate_simple([np.log10(events['angErr']), events['logE'], np.log10(psi), np.full(events.shape[0], gamma)], 8)/(psi *np.log(10) * np.sin(psi)) 
         else:
             #cascade spatial term
             if not dgamma:
@@ -266,7 +289,7 @@ class tester():
     def test_methods(self, ra, dec, ninj_t = 0, ninj_c = 0, gamma = 2, return_fit = False):
         tracks = np.concatenate([self.gen(ninj_t, gamma, 0, inra = ra, indec = dec),self.gen(self.track_count, 3.7, 0)])
         cascades = np.concatenate([self.gen(ninj_c, gamma, 1, inra = ra, indec = dec),self.gen(self.cascade_count, 3.7, 1)])
-
+        
         if return_fit:
             return self.analyze(tracks, cascades, ra, dec)[0], self.analyze(tracks, cascades, ra, dec)[1]
         return self.analyze(tracks, cascades, ra, dec)[0]
