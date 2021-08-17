@@ -124,7 +124,7 @@ class tester():
         samples = [tracks, cascades]
         if None in samples:
             samples.pop(samples.index(None))
-            B = self.fB(samples[0])
+            B = self.fB(samples[0], onesamp = True)
             N = samples[0].shape[0]
             x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2.5), bounds = ((0,1000),(1,4)), fprime = None, approx_grad = False, args = (samples[0], None, src_ra, src_dec, B, N))
             TS = -2*llh
@@ -194,13 +194,20 @@ class tester():
 
         return (-logllh, (-dl_dns, -dl_dgamma))
 
-    def fB(self, events):
+    def fB(self, events, onesamp = False):
         topo = events['topo'][0]
         # .97,.03 represent the topology ratio for background events-- get this from data eventually
         if not topo:
-            return self['BT'].evaluate_simple([events['logE'], events['sinDec']]) * .97
+            BT = self['BT'].evaluate_simple([events['logE'], events['sinDec']])
+            if not onesamp:
+                return BT * .97
+            return BT
+
         else:
-            return np.exp(self['BC'].evaluate_simple([events['sinDec'], events['logE']])) * .03
+            BC = np.exp(self['BC'].evaluate_simple([events['sinDec'], events['logE']])) / (2*np.pi)
+            if not onesamp:
+                return BC * (1-0.97)
+            return BC
 
     #functions to evaluate the llh signal observable functions based on topology
     #dgamma decision trees because of inconsistency in observable placement in spline calls
