@@ -7,10 +7,6 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # MISC UTILITY FUNCTIONS ---
-#used in kent dist; spherical dot product
-def sph_dot(th1,th2,phi1,phi2):
-    return np.sin(th1)*np.sin(th2)*np.cos(phi1-phi2) + np.cos(th1)*np.cos(th2)
-
 def logit(x):
     return np.log(x/(1-x))
 
@@ -29,10 +25,11 @@ def GreatCircleDistance(ra_1, dec_1, ra_2, dec_2):
             np.cos(dec_2) * (np.sin(delta_ra / 2.))**2.
         return 2. * np.arcsin(np.sqrt(x))
 
-def evPSFd(nue,numu):
-    kappa = 1./(nue[2])**2
-    log_dist = np.log(kappa) - np.log(2*np.pi) - kappa + kappa*sph_dot(np.pi/2-nue[1], np.pi/2-numu[1], nue[0], numu[0])
-    return np.exp(log_dist)
+#takes in psi, sigma
+def rayleigh(x, s):
+    sq = s**2
+    pdf = x/sq * np.exp(-x**2/(2*sq))
+    return pdf
 
 ####################################################################################
 
@@ -50,7 +47,7 @@ class tester():
 
     Takes in the above arguments, checks to make sure they're of the right form, then creates pdfs from MC and initializes the object
     '''
-    def __init__(self, tracks, cascades, resolution = 8, args = dict()):
+    def __init__(self, resolution = 8, args = dict()):
 
         self.args = args
 
@@ -58,9 +55,6 @@ class tester():
         if 'delta_ang' not in args:
             #default area to consider possibly signal
             args['delta_ang'] = np.deg2rad(20)
-
-        self.track_count = tracks
-        self.cascade_count = cascades
 
         self.load_pdfs()
 
@@ -79,9 +73,6 @@ class tester():
                 print("topo = 0 for tracks, topo = 1 for cascades")
                 return
 
-            if self['NORTH']:
-                mc = mc[mc['sinDec'] > 0]
-
             p=mc["ow"]*np.power(mc['trueE'],-g)
             p/=np.sum(p)
             keySC=np.random.choice( np.arange(len(p)), n_Ev, p=p, replace=False)
@@ -93,7 +84,7 @@ class tester():
                 sigmags=np.random.normal(scale=evs["angErr"])
 
                 evs["dec"] = indec + np.sin(eta) * sigmags
-                evs["ra"] = inra + np.cos(eta) * sigmags
+                evs["ra"]  = inra + np.cos(eta)  * sigmags
 
                 changeDecs=evs['dec']> np.pi/2
                 #over shooting in dec is the same as rotating arounf and subtracting the Dec from pi.
@@ -126,7 +117,7 @@ class tester():
             samples.pop(samples.index(None))
             B = self.fB(samples[0], onesamp = True)
             N = samples[0].shape[0]
-            x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2.5), bounds = ((0,1000),(1,4)), fprime = None, approx_grad = False, args = (samples[0], None, src_ra, src_dec, B, N))
+            x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2), bounds = ((0,1e3),(1,5)), fprime = None, approx_grad = False, args = (samples[0], None, src_ra, src_dec, B, N))
             TS = -2*llh
             return TS, x, warn
 
@@ -140,7 +131,7 @@ class tester():
         casc_B  = self.fB(cascades)
         B = np.concatenate([track_B, casc_B])
 
-        x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2.5), bounds = ((0,1000),(1,4)), fprime = None, approx_grad = False, args = (source_tracks, cascades, src_ra, src_dec, B, N))
+        x,llh,warn = fmin_l_bfgs_b(self.llh, x0 = (10,2), bounds = ((0,1e3),(1,5)), fprime = None, approx_grad = False, args = (source_tracks, cascades, src_ra, src_dec, B, N))
 
         #negative max llh
         maxllh = -llh
@@ -157,7 +148,8 @@ class tester():
         #PATH IF TRACKS OR CASCADES MISSING (1 sample)
         if cascades is None:
             deltaN = N - (tracks.shape[0])
-            S = self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma)* self.f_tau(tracks, src_ra, src_dec, gamma)
+            #when only one sample is present we drop p(tau)
+            S = self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma)
             llh_vals = (ns/N)*(S/B - 1) + 1
             logllh = np.sum(np.log(llh_vals)) + deltaN*np.log(1-(ns/N))
             #gradient calculation
@@ -166,7 +158,7 @@ class tester():
             product_rule = (self.f_psi(tracks, src_ra, src_dec, gamma, dgamma = True)*self.f_energy(tracks, src_ra, src_dec, gamma) +
                               self.f_psi(tracks, src_ra, src_dec, gamma)*self.f_energy(tracks, src_ra, src_dec, gamma, dgamma = True))
             dl_dgamma = np.sum((ns/N)/(llh_vals * B) * product_rule)
-            return (-logllh, (-dl_dns, -dl_dgamma))
+            return (-logllh , (-dl_dns, -dl_dgamma))
 
         deltaN = N - (tracks.shape[0] + cascades.shape[0])
 
@@ -204,7 +196,9 @@ class tester():
             return BT
 
         else:
-            BC = np.exp(self['BC'].evaluate_simple([events['sinDec'], events['logE']])) / (2*np.pi)
+            #1/2pi dropped here and in psi normalization
+            BC = self['BC'].evaluate_simple([events['sinDec'], events['logE']])
+            BC[BC <= 0] = 1e-12
             if not onesamp:
                 return BC * (1-0.97)
             return BC
@@ -222,9 +216,10 @@ class tester():
         else:
             #cascade spatial term
             if not dgamma:
-                return evPSFd([events['ra'],events['dec'],events['angErr']], [src_ra, src_dec])
+                #1/2pi dropped
+                return rayleigh(psi, events['angErr']) / np.sin(psi)
             else:
-                #for dumb cascade spatial pdfs that don't change with gamma
+                #for cascade spatial pdfs that don't change with gamma
                 return 0
 
     def f_energy(self, events, src_ra, src_dec, gamma=2, dgamma=False):
@@ -264,8 +259,7 @@ class tester():
         self.args[key] = val
 
     def __repr__(self):
-        return f'Multi-tester object crafted for the Topology Aware LLH method.\nBackground tracks: {self.track_count} Background Cascades: {self.cascade_count}\nWill be stored in the file "{self.pkl}" with tester name "{self.name}"'
-
+        return f'Multi-tester sub-object crafted for the Topology Aware LLH method'
 
     '''
     Ran during initialization of a tester object to store pdfs in tester.args
@@ -274,34 +268,18 @@ class tester():
     '''
     def load_pdfs(self):
 
-        track_spatial = psp.SplineTable('./splines/sig_E_psi_photospline_v006_4D.fits')
-        track_energy = psp.SplineTable('./splines/E_dec_photospline_v006_3D.fits')
-        track_bkg = psp.SplineTable('./splines/bg_2d_photospline.fits')
-
-        #casc_spatial = psp.SplineTable('./splines/sig_E_psi_photospline_v006_4D.fits')
-        casc_energy = psp.SplineTable('./splines/cascade_E_dec_photospline_v000_3D.fits')
-        casc_bkg = psp.SplineTable('./splines/cascade_bg_2d_photospline.fits')
-
-        #temporary northern sky only ptau made with Northern Tracks and DNN Cascades
-        topology = psp.SplineTable('./splines/tau_photospline_v000_2D.fits')
-
-        #fills in tester with splines for energy, background spatial term, and topology for both split topology and non split topology searches
-        self.args['ST'] = track_spatial
+        #Spatial terms
+        self.args['ST'] = psp.SplineTable('./splines/sig_E_psi_photospline_v006_4D.fits')
         self.args['SC'] = None
 
-        self.args['BT'] = track_bkg
-        self.args['BC'] = casc_bkg
+        #Energy terms
+        self.args['ET'] = psp.SplineTable('./splines/E_dec_photospline_v006_3D.fits')
+        self.args['EC'] = psp.SplineTable('./splines/cascade_E_dec_photospline_v003_3D.fits')
 
-        self.args['ET'] = track_energy
-        self.args['EC'] = casc_energy
+        #Background terms
+        self.args['BT'] = psp.SplineTable('./splines/bg_2d_photospline.fits')
+        self.args['BC'] = psp.SplineTable('./splines/cascade_bg_2d_photospline_v002.fits')
 
-        self.args['Tau'] = topology
-
-    #wrapper function for creating a number of events and calculating TS
-    def test_methods(self, ra, dec, ninj_t = 0, ninj_c = 0, gamma = 2, return_fit = False):
-        tracks = np.concatenate([self.gen(ninj_t, gamma, 0, inra = ra, indec = dec),self.gen(self.track_count, 3.7, 0)])
-        cascades = np.concatenate([self.gen(ninj_c, gamma, 1, inra = ra, indec = dec),self.gen(self.cascade_count, 3.7, 1)])
-
-        if return_fit:
-            return self.analyze(tracks, cascades, ra, dec)[0], self.analyze(tracks, cascades, ra, dec)[1]
-        return self.analyze(tracks, cascades, ra, dec)[0]
+        #Topology term (Call for cascades-- call 1-Tau for tracks)
+        self.args['Tau'] = psp.SplineTable('./splines/tau_photospline_v000_2D.fits')
+        return
